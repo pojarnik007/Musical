@@ -2,7 +2,7 @@
 
 ![Logo](https://github.com/shubyaa/Music-player-using-kotlin/blob/master/music_icon.png)
 
-This is an Android Application made using Kotlin Language. This app is made in **Android 6.0 version** with minimum SDK Version as 23 **(API Level 23)**.
+This is an Android Application made using Kotlin Language. This app is made in **Android 8.8 version** with minimum SDK Version as 35.
 
 The flow of project goes as follows:-
 
