@@ -1,8 +1,8 @@
 package com.example.musicplayer
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
-import android.database.Cursor
 import android.media.AudioAttributes
 import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
@@ -10,29 +10,41 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.util.Log
 import android.view.View
-import android.widget.*
+import android.widget.ImageButton
+import android.widget.ImageView
+import android.widget.PopupMenu
+import android.widget.SeekBar
+import android.widget.TextView
+import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import com.bumptech.glide.Glide
 import com.example.musicplayer.Model.SongModel
-import kotlin.collections.ArrayList
 
-
+@Suppress("DEPRECATION")
 class MainActivity : AppCompatActivity() {
-    var position: Int = -1
-    var shuffle_check = false
-    var repeat_check = false
-    var uri: Uri = Uri.EMPTY
-    var list: ArrayList<SongModel> = ArrayList()
+
+    lateinit var list: java.util.ArrayList<SongModel>
+    private var position = -1
+    private var shuffleEnabled = false
+    private var repeatEnabled = false
+
+    private lateinit var uri: Uri
+    private lateinit var mediaPlayer: MediaPlayer
+    private lateinit var handler: Handler
     private lateinit var runnable: Runnable
+
+    private lateinit var songList: ArrayList<SongModel>
+
     private lateinit var albumImage: ImageView
     private lateinit var songName: TextView
     private lateinit var artistName: TextView
     private lateinit var back: ImageView
-    private lateinit var play_pause: ImageButton
+    private lateinit var playPause: ImageButton
     private lateinit var previous: ImageView
     private lateinit var next: ImageView
     private lateinit var seekBar: SeekBar
@@ -44,335 +56,254 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var popupMenu: PopupMenu
 
-    private var handler = Handler()
-    private var mediaPlayer: MediaPlayer? = MediaPlayer()
-
     @RequiresApi(Build.VERSION_CODES.R)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requestPermissions(arrayOf(android.Manifest.permission.READ_MEDIA_AUDIO), 1)
+        } else {
+            requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), 1)
+        }
+
         setContentView(R.layout.activity_main)
 
-        list = getAudioFiles()
+        initViews()
+        handler = Handler(Looper.getMainLooper())
+
+        songList = getAudioFiles()
         position = intent.getIntExtra("position", -1)
 
+        if (position == -1 || position >= songList.size) {
+            Toast.makeText(this, "Ошибка: трек не найден", Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+
+        position = intent.getIntExtra("position", -1)
+
+        if (position == -1 || position >= songList.size) {
+            Toast.makeText(this, "Invalid song position", Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+
+        uri = songList[position].songUri
+        playMedia(uri)
+
+        setupListeners()
+    }
+
+
+    private fun initViews() {
         menu = findViewById(R.id.menu)
         songName = findViewById(R.id.textView)
         artistName = findViewById(R.id.textView2)
         albumImage = findViewById(R.id.album_art)
-
         back = findViewById(R.id.back)
-
-        play_pause = findViewById(R.id.play_pause)
+        playPause = findViewById(R.id.play_pause)
         previous = findViewById(R.id.previous)
         next = findViewById(R.id.next)
-
         seekBar = findViewById(R.id.seekBar)
         startTime = findViewById(R.id.start_time)
         endTime = findViewById(R.id.end_time)
-
         shuffle = findViewById(R.id.shuffle)
         loop = findViewById(R.id.loop)
+    }
 
-        uri = list[position].songUri
+    private fun setupListeners() {
+        menu.setOnClickListener { openMenu(this, it) }
 
-        setLayout(albumImage, songName, artistName, uri)
-
-        playMedia(uri)
-        //menu
-        menu.setOnClickListener {
-            openMenu(this, it)
-        }
-
-        //play & pause Button
-        play_pause.setOnClickListener {
-            if (mediaPlayer!!.isPlaying) {
-                play_pause.setBackgroundResource(R.drawable.play)
-                mediaPlayer!!.pause()
+        playPause.setOnClickListener {
+            if (mediaPlayer.isPlaying) {
+                mediaPlayer.pause()
+                playPause.setBackgroundResource(R.drawable.play)
             } else {
-                play_pause.setBackgroundResource(R.drawable.pause)
-                mediaPlayer!!.start()
+                mediaPlayer.start()
+                playPause.setBackgroundResource(R.drawable.pause)
             }
         }
-        //next & previous Button
-        next.setOnClickListener {
-            nextPrevious(name = true)
-        }
-        previous.setOnClickListener {
-            nextPrevious(name = false)
-        }
+
+        next.setOnClickListener { changeSong(next = true) }
+        previous.setOnClickListener { changeSong(next = false) }
 
         back.setOnClickListener {
-            mediaPlayer!!.stop()
-            mediaPlayer!!.reset()
-            mediaPlayer!!.release()
-            handler.removeCallbacks(runnable)
-            finish()
+            onBackPressed()
         }
 
-        // All About Seekbar
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (mediaPlayer != null && fromUser) {
-                    val x = progress / 1000
-                    mediaPlayer!!.seekTo(x)
-
-                }
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) mediaPlayer.seekTo(progress)
             }
 
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {
-                if (mediaPlayer!!.isPlaying) {
-                    mediaPlayer!!.seekTo(seekBar!!.progress)
-                    startTime.text = seekBar.progress.toString()
-                }
-            }
-
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                if (mediaPlayer!!.isPlaying) {
-                    mediaPlayer!!.seekTo(seekBar!!.progress)
-                }
-            }
-
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
         })
 
-        //Shuffle Button
         shuffle.setOnClickListener {
-            if (!shuffle_check) {
-                shuffle_check = true
-                shuffle.setBackgroundResource(R.drawable.shuffle_dark)
-            } else {
-                shuffle_check = false
-                shuffle.setBackgroundResource(R.drawable.shuffle)
-            }
+            shuffleEnabled = !shuffleEnabled
+            shuffle.setBackgroundResource(if (shuffleEnabled) R.drawable.shuffle_dark else R.drawable.shuffle)
         }
 
-        //Repeat Button
         loop.setOnClickListener {
-            if (!repeat_check) {
-                repeat_check = true
-                loop.setBackgroundResource(R.drawable.loop_dark)
-            } else {
-                repeat_check = false
-                loop.setBackgroundResource(R.drawable.loop)
-            }
+            repeatEnabled = !repeatEnabled
+            loop.setBackgroundResource(if (repeatEnabled) R.drawable.loop_dark else R.drawable.loop)
         }
-    }
-
-    private fun rand(start: Int, end: Int): Int {
-        require(start <= end) { "Illegal Argument" }
-        return (start..end).random()
-    }
-
-
-    private fun setLayout(image: ImageView, song: TextView, artist: TextView, uri: Uri) {
-        val byteArray = getAlbumArt(uri)
-        Glide.with(applicationContext).asBitmap().load(byteArray).centerCrop().placeholder(R.drawable.music_note).into(image)
-
-        song.text = list[position].name
-        artist.text = list[position].artist
-    }
-
-    @RequiresApi(Build.VERSION_CODES.R)
-    fun getAudioFiles(): ArrayList<SongModel> {
-        val list: ArrayList<SongModel> = ArrayList()
-        val uri: Uri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-        val proj = arrayOf(
-            MediaStore.Audio.Media.DISPLAY_NAME,
-            MediaStore.Audio.Media.ALBUM,
-            MediaStore.Audio.Media.TITLE,
-            MediaStore.Audio.Media.DURATION,
-            MediaStore.Audio.Media.DATA, //For Image
-            MediaStore.Audio.Media.ARTIST,
-        )
-
-        //Cursor is an interface where with the help of which we can access & write data
-        // according to the requirement
-
-        val audioCursor: Cursor? = contentResolver.query(
-            uri,
-            proj,
-            null,
-            null,
-            null
-        )
-
-        if (audioCursor != null) {
-            if (audioCursor.moveToFirst()) {
-                do {
-                    val songName: String =
-                        audioCursor.getString(audioCursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME))
-                    val artistName: String =
-                        audioCursor.getString(audioCursor.getColumnIndex(MediaStore.Audio.Media.ARTIST))
-                    val url: String =
-                        audioCursor.getString(audioCursor.getColumnIndex((MediaStore.Audio.Media.DATA)))
-                    val duration =
-                        audioCursor.getDouble(audioCursor.getColumnIndex(MediaStore.Audio.Media.DURATION))
-                    val title =
-                        audioCursor.getString(audioCursor.getColumnIndex(MediaStore.Audio.Media.TITLE))
-
-                    val path = Uri.parse(url)
-
-                    val songModel = SongModel(path, songName, artistName, duration, path)
-
-                    list.add(songModel)
-
-
-                } while (audioCursor.moveToNext())
-            }
-        }
-
-        // a List has sortby method in which we can sort a list of object with respect to a
-        // parameter of the object, in this case it is sorted w.r.t. name
-        list.sortBy { it.name }
-        audioCursor?.close()
-
-        return list
-    }
-
-    fun timeFormat(duration: Int): String {
-        val minutes = (duration % (1000 * 60 * 60) / (1000 * 60))
-        val seconds = (duration % (1000 * 60 * 60) % (1000 * 60) / 1000)
-
-        return String.format("%02d:%02d", minutes, seconds)
     }
 
     private fun playMedia(uri: Uri) {
-        setLayout(albumImage, songName, artistName, uri)
-
         try {
-            if (mediaPlayer != null) {
-                mediaPlayer = MediaPlayer().apply {
-                    setDataSource(this@MainActivity, uri)
-                    setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .build()
-                    )
-                    prepare()
-                }
-                mediaPlayer!!.start()
-                adjustSeekBar(seekBar)
+            releasePlayer()
+
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(this@MainActivity, uri)
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+                prepare()
+                start()
+                setOnCompletionListener { changeSong(true) }
             }
+
+            updateLayout()
+            setupSeekBar()
+
         } catch (e: Exception) {
-            Log.i("exception_PlayMedia", e.toString())
+            Log.e("MainActivity", "MediaPlayer error", e)
         }
+    }
+
+    private fun updateLayout() {
+        val song = songList[position]
+        val albumArt = getAlbumArt(song.songUri)
+
+        Glide.with(this)
+            .asBitmap()
+            .load(albumArt)
+            .centerCrop()
+            .placeholder(R.drawable.music_note)
+            .into(albumImage)
+
+        songName.text = song.name
+        artistName.text = song.artist
+    }
+
+    private fun setupSeekBar() {
+        seekBar.max = mediaPlayer.duration
+
+        runnable = object : Runnable {
+            override fun run() {
+                seekBar.progress = mediaPlayer.currentPosition
+                startTime.text = formatTime(mediaPlayer.currentPosition)
+                endTime.text = formatTime(mediaPlayer.duration)
+                handler.postDelayed(this, 500)
+            }
+        }
+
+        handler.postDelayed(runnable, 0)
+    }
+
+    private fun changeSong(next: Boolean) {
+        position = when {
+            repeatEnabled -> position
+            shuffleEnabled -> (0 until songList.size).random()
+            else -> if (next) (position + 1) % songList.size else (position - 1 + songList.size) % songList.size
+        }
+
+        playMedia(songList[position].songUri)
+    }
+
+    @SuppressLint("DefaultLocale")
+    private fun formatTime(duration: Int): String {
+        val minutes = (duration % (1000 * 60 * 60) / (1000 * 60))
+        val seconds = (duration % (1000 * 60 * 60) % (1000 * 60) / 1000)
+        return String.format("%02d:%02d", minutes, seconds)
     }
 
     private fun openMenu(context: Context, view: View) {
-        popupMenu = PopupMenu(context, view)
-        popupMenu.menuInflater.inflate(R.menu.menu, popupMenu.menu)
-        popupMenu.setOnMenuItemClickListener {
-            when (it.itemId) {
-                R.id.share ->
-                    shareMenuOption()
+        popupMenu = PopupMenu(context, view).apply {
+            menuInflater.inflate(R.menu.menu, menu)
+            setOnMenuItemClickListener {
+                if (it.itemId == R.id.share) {
+                    shareSong()
+                    true
+                } else false
             }
-            true
+            show()
         }
-        popupMenu.show()
     }
 
-    private fun shareMenuOption() {
-        val shareIntent = Intent().apply {
-            this.action = Intent.ACTION_SEND
-            this.type = "audio/*"
-            this.putExtra(Intent.EXTRA_STREAM, list[position].songUri)
+    private fun shareSong() {
+        val songUri = songList[position].songUri
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "audio/*"
+            putExtra(Intent.EXTRA_STREAM, songUri)
         }
-
-        startActivity(Intent.createChooser(shareIntent, "Share this file using :"))
+        startActivity(Intent.createChooser(shareIntent, "Share song via"))
     }
 
-    private fun adjustSeekBar(seekBar: SeekBar) {
-        seekBar.max = mediaPlayer!!.duration
-        runnable = Runnable {
-            seekBar.progress = mediaPlayer!!.currentPosition
-            startTime.text = timeFormat(mediaPlayer!!.currentPosition)
-            endTime.text = timeFormat(mediaPlayer!!.duration)
+    private fun getAudioFiles(): ArrayList<SongModel> {
+        val list = ArrayList<SongModel>()
+        val uri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(
+            MediaStore.Audio.Media.DISPLAY_NAME,
+            MediaStore.Audio.Media.ARTIST,
+            MediaStore.Audio.Media.DATA,
+            MediaStore.Audio.Media.DURATION,
+            MediaStore.Audio.Media.TITLE
+        )
 
-            mediaPlayer!!.setOnCompletionListener {
-                nextPrevious(true)
+        contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+            val nameIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
+            val artistIndex = cursor.getColumnIndex(MediaStore.Audio.Media.ARTIST)
+            val dataIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+            val durationIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DURATION)
+
+            while (cursor.moveToNext()) {
+                val name = cursor.getString(nameIndex) ?: "Unknown"
+                val artist = cursor.getString(artistIndex) ?: "Unknown"
+                val data = cursor.getString(dataIndex)
+                val duration = cursor.getLong(durationIndex)
+
+                if (data != null) {
+                    val path = Uri.parse(data)
+                    list.add(SongModel(path, name, artist, duration.toDouble(), path))
+                }
             }
-
-            handler.postDelayed(runnable, 300)
-
         }
 
-        handler.postDelayed(runnable, 300)
+        list.sortBy { it.name }
+        return list
     }
 
     private fun getAlbumArt(uri: Uri): ByteArray? {
-
-        val metadataRetriever = MediaMetadataRetriever()
-        metadataRetriever.setDataSource(uri.toString())
-
-        val result: ByteArray? = metadataRetriever.embeddedPicture
-        metadataRetriever.release()
-
-        return result
-    }
-
-    private fun nextPrevious(name: Boolean) {
-        if (name) {
-            mediaPlayer!!.stop()
-            mediaPlayer!!.reset()
-            mediaPlayer!!.release()
-
-            position = checkPosition(position, true)
-            playMedia(list[position].songUri)
-        } else {
-            mediaPlayer!!.stop()
-            mediaPlayer!!.reset()
-            mediaPlayer!!.release()
-
-            position = checkPosition(position, false)
-            playMedia(list[position].songUri)
+        return try {
+            MediaMetadataRetriever().run {
+                setDataSource(this@MainActivity, uri)
+                val art = embeddedPicture
+                release()
+                art
+            }
+        } catch (e: Exception) {
+            null
         }
     }
 
-    private fun checkPosition(value: Int, increment: Boolean): Int {
-        var return_value = 0
-
-        if (increment) {
-            if (value == list.size - 1) {
-                return_value = 0
-            } else {
-                if (shuffle_check && !repeat_check) {
-                    return_value = rand(0, list.size - 1)
-                } else if (!shuffle_check && repeat_check ||
-                    shuffle_check && repeat_check
-                ) {
-
-                    return_value = position
-                } else {
-                    return_value = ++position
-                }
-
-            }
-        } else {
-            if (value == 0) {
-                return_value = list.size - 1
-            } else {
-                if (shuffle_check && repeat_check || !shuffle_check && repeat_check) {
-                    return_value = position
-                } else if (shuffle_check && !repeat_check) {
-                    return_value = rand(0, list.size - 1)
-                } else {
-                    return_value = --position
-                }
-
-            }
+    private fun releasePlayer() {
+        if (::mediaPlayer.isInitialized) {
+            mediaPlayer.stop()
+            mediaPlayer.release()
+            handler.removeCallbacksAndMessages(null)
         }
-
-        return return_value
     }
 
 
-    override fun onBackPressed() {
-        mediaPlayer!!.stop()
-        mediaPlayer!!.reset()
-        mediaPlayer!!.release()
-        handler.removeCallbacks(runnable)
-        finish()
+
+    override fun onDestroy() {
+        super.onDestroy()
+        releasePlayer()
     }
-
-
 }
